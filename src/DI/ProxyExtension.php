@@ -3,6 +3,7 @@ declare(strict_types=1);
 
 namespace Lookyman\Nette\Proxy\DI;
 
+use Contributte\Console\Application;
 use Lookyman\Nette\Proxy\Console\GenerateProxiesCommand;
 use Nette\DI\CompilerExtension;
 use Nette\DI\Container;
@@ -73,13 +74,18 @@ class ProxyExtension extends CompilerExtension
 			->setAutowired(false)
 			->addTag(self::TAG_LAZY, false);
 
-		// command
+		// command - kdyby console
 		/** @var \Kdyby\Console\DI\ConsoleExtension $extension */
 		foreach ($this->compiler->getExtensions('Kdyby\Console\DI\ConsoleExtension') as $extension) {
 			$builder->addDefinition($this->prefix('generateProxiesCommand'))
 				->setClass(GenerateProxiesCommand::class)
 				->addTag($extension::TAG_COMMAND);
 			break;
+		}
+		// command - contribute console
+		if ($this->compiler->getContainerBuilder()->findByType(Application::class)) {
+			$builder->addDefinition($this->prefix('generateProxiesCommand'))
+				->setClass(GenerateProxiesCommand::class);
 		}
 	}
 
