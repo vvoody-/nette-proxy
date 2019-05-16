@@ -37,6 +37,7 @@ class ProxyExtension extends CompilerExtension
 		'Nette\Database\Connection',
 		'Nette\Http\Request',
 		'Nette\Security\User',
+		'Nette\DI\Container',
 	];
 
 	public function loadConfiguration()
@@ -89,38 +90,53 @@ class ProxyExtension extends CompilerExtension
 		}
 	}
 
-	public function beforeCompile()
-	{
-		$builder = $this->getContainerBuilder();
-		$config = $this->getConfig();
-
-		// do not proxy these services
-		// @see https://ocramius.github.io/ProxyManager/docs/lazy-loading-value-holder.html#known-limitations
-		foreach ($this->excluded as $type) {
-			foreach ($builder->findByType($type) as $def) {
-				$def->addTag(self::TAG_LAZY, false);
-			}
-		}
-
-		// add service type as tag attribute
-		foreach (array_keys($config['default'] ? $builder->getDefinitions() : $builder->findByTag(self::TAG_LAZY)) as $name) {
-			$def = $builder->getDefinition($name);
-			if ($def->getTag(self::TAG_LAZY) === false) {
-				$def->setTags(array_diff_key($def->getTags(), [self::TAG_LAZY => null]));
-				continue;
-			}
-			$def->addTag(self::TAG_LAZY, $def->getImplement() ?: $def->getClass());
-		}
-	}
-
 	/**
 	 * @param ClassType $class
 	 */
 	public function afterCompile(ClassType $class)
 	{
-		foreach ($this->getContainerBuilder()->findByTag(self::TAG_LAZY) as $name => $type) {
+		$default = $this->getConfig()['default'];
+
+		foreach ($this->getContainerBuilder()->getDefinitions() as $definition) {
+			$createProxy = $definition->getTag(self::TAG_LAZY);
+			if ($createProxy === NULL) {
+				$createProxy = $default;
+			}
+
+			if (!$createProxy) {
+				continue;
+			}
+
+			$type = $definition->getType();
+
+			foreach ($this->excluded as $excludedClass) {
+				if (is_a($type, $excludedClass, TRUE)) {
+					continue 2;
+				}
+			}
+
+			if ((new \ReflectionClass($type))->isFinal()) {
+				continue;
+			}
+
+			$magicMethods = [
+				'__set',
+				'__get',
+				'__isset',
+				'__unset',
+			];
+
+			foreach ($magicMethods as $method) {
+				if (method_exists($type, $method)) {
+					$reflectionMethod = new \ReflectionMethod($type, $method);
+					if ($reflectionMethod->hasReturnType()) {
+						continue 2;
+					}
+				}
+			}
+
 			// modify original method body to return proxy instead
-			$method = $class->getMethod(Container::getMethodName($name));
+			$method = $class->getMethod(Container::getMethodName($definition->getName()));
 			$method->setBody(sprintf(
 				"return \$this->getService('%s')->createProxy(\n\t%s::class,\n\tfunction (&\$wrappedObject, \$proxy, \$method, \$parameters, &\$initializer) {\n\t\t\$wrappedObject = (%s)();\n\t\t\$initializer = null;\n\t\treturn true;\n\t}\n);",
 				$this->prefix('lazyLoadingValueHolderFactory'), $type, ltrim(preg_replace('#^#m', "\t\t", (new Closure())->addBody($method->getBody())))
